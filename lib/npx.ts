@@ -19,6 +19,8 @@ const execFileAsync = promisify(execFile);
 function findNpxCli(): string | null {
   const nodeDir = dirname(execPath);
   const candidates = [
+    // Desktop bundle: npm is a production dependency next to the app server.
+    join(process.cwd(), "node_modules", "npm", "bin", "npx-cli.js"),
     // Windows MSI installer layout: node.exe and node_modules share a dir
     join(nodeDir, "node_modules", "npm", "bin", "npx-cli.js"),
     // Unix layout: .../bin/node + .../lib/node_modules/npm/bin/npx-cli.js

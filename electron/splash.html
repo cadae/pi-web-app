@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:"
+    >
+    <meta name="color-scheme" content="dark light">
+    <title>Starting Pi Web</title>
+    <style>
+      :root {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+        color: #ececec;
+        background: #121212;
+      }
+      body {
+        display: grid;
+        min-height: 100vh;
+        margin: 0;
+        place-items: center;
+      }
+      main {
+        display: grid;
+        gap: 18px;
+        justify-items: center;
+      }
+      img {
+        width: 96px;
+        height: 96px;
+        border-radius: 22px;
+      }
+      p {
+        margin: 0;
+        color: #a6a6a6;
+        font-size: 14px;
+      }
+      .spinner {
+        width: 18px;
+        height: 18px;
+        border: 2px solid #3b3b3b;
+        border-top-color: #bcbcbc;
+        border-radius: 50%;
+        animation: spin 800ms linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-color-scheme: light) {
+        :root { color: #171717; background: #f6f6f6; }
+        p { color: #666; }
+        .spinner { border-color: #d6d6d6; border-top-color: #555; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="../public/icons/icon-192.png" alt="Pi Web">
+      <div class="spinner" aria-hidden="true"></div>
+      <p>Starting the local Pi agent…</p>
+    </main>
+  </body>
+</html>

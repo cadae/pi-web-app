@@ -11,6 +11,7 @@
     "url": "https://github.com/agegr/pi-web/issues"
   },
   "license": "MIT",
+  "main": "electron/main.cjs",
   "engines": {
     "node": ">=22.19.0"
   },
@@ -19,6 +20,7 @@
   },
   "files": [
     "bin",
+    "electron",
     ".next",
     "!.next/cache",
     "!.next/dev",
@@ -34,7 +36,10 @@
     "start": "next start -H 127.0.0.1 -p 30141",
     "start:lan": "next start -H 0.0.0.0 -p 30141",
     "lint": "eslint .",
-    "test": "node --experimental-strip-types --test \"app/**/*.test.mjs\" \"components/**/*.test.mjs\" \"hooks/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"public/**/*.test.mjs\"",
+    "test": "node --experimental-strip-types --test \"app/**/*.test.mjs\" \"components/**/*.test.mjs\" \"electron/**/*.test.cjs\" \"hooks/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"public/**/*.test.mjs\"",
+    "electron:dev": "electron .",
+    "electron:pack": "npm run build && electron-builder --mac dir",
+    "electron:dist": "npm run build && electron-builder --mac dmg zip",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
   "dependencies": {
@@ -43,8 +48,10 @@
     "@earendil-works/pi-coding-agent": "0.84.3",
     "@earendil-works/pi-tui": "0.84.3",
     "ansi_up": "^6.0.6",
+    "fix-path": "^5.0.0",
     "js-yaml": "^5.2.3",
     "next": "16.3.1",
+    "npm": "11.19.1",
     "proper-lockfile": "4.1.2",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
@@ -61,6 +68,8 @@
     "@types/react-dom": "^19",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@types/web-push": "^3.6.4",
+    "electron": "^44.1.0",
+    "electron-builder": "^26.15.3",
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
     "jiti": "^2.7.0",
@@ -77,5 +86,49 @@
     "remark-math": "^6.0.0",
     "tailwindcss": "^4.2.2",
     "typescript": "^5"
+  },
+  "build": {
+    "appId": "com.cadae.piwebapp",
+    "productName": "Pi Web",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "asar": true,
+    "asarUnpack": [
+      ".next/**/*",
+      "bin/**/*",
+      "node_modules/**/*",
+      "public/**/*",
+      "next.config.ts",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "electron/**/*",
+      "bin/**/*",
+      "public/**/*",
+      ".next/**/*",
+      "node_modules/**/*",
+      "next.config.ts",
+      "package.json",
+      "LICENSE",
+      "!.next/cache",
+      "!.next/dev",
+      "!.next/**/*.js.map",
+      "!node_modules/.cache",
+      "!node_modules/**/*.map",
+      "!node_modules/electron/**/*",
+      "!node_modules/electron-builder/**/*",
+      "!node_modules/@electron/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "icon": "electron/icon.png",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    }
   }
 }

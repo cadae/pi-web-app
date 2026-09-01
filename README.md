@@ -138,6 +138,22 @@ npm run lint
 
 Do not run `next build` or `npm run build` during normal development. It writes to `.next/` and can interfere with the development server; leave builds for release work.
 
+### macOS desktop app
+
+The repository includes an Electron host that runs the same Pi Web server on a
+private loopback port and displays it in a sandboxed native window. It continues
+to use the existing `~/.pi/agent` data and configuration.
+
+```bash
+npm install
+npm run electron:dev   # development window + Next.js dev server
+npm run electron:pack  # unsigned local .app in dist-electron/mac-arm64/
+npm run electron:dist  # DMG and ZIP; signing uses the configured Apple identity
+```
+
+See [macOS desktop packaging](./docs/macos-desktop.md) for architecture,
+security, signing, and release details.
+
 Contributor guides: [Internationalization](./docs/i18n.md) and [Release process](./docs/release.md).
 
 ## Repository Layout
@@ -149,6 +165,7 @@ hooks/           Client state and interaction hooks
 lib/             Session, agent, model, file, Git, and security logic
 public/          Static assets and PWA files
 bin/             npm CLI entrypoint and launch option parsing
+electron/        macOS Electron host and server supervisor
 docs/            Focused user and contributor guides
 ```
 

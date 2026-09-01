@@ -1,0 +1,205 @@
+name: Build macOS app for upstream release
+
+on:
+  schedule:
+    # Cross-repository release events are not forwarded to this fork, so poll
+    # away from the top of the hour when scheduled workflows are busiest.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Upstream main-branch release tag (blank means latest stable)"
+        required: false
+        type: string
+      force:
+        description: "Rebuild even if the fork already has a draft release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-macos-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPOSITORY: agegr/pi-web
+
+jobs:
+  detect:
+    name: Detect a new stable release
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.release.outputs.should_build }}
+      upstream_tag: ${{ steps.release.outputs.upstream_tag }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
+    steps:
+      - name: Resolve upstream release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.upstream_tag }}
+          FORCE_BUILD: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${REQUESTED_TAG}" ]]; then
+            upstream_tag="${REQUESTED_TAG}"
+            gh api "repos/${UPSTREAM_REPOSITORY}/releases/tags/${upstream_tag}" >/dev/null
+          else
+            upstream_tag="$(gh api "repos/${UPSTREAM_REPOSITORY}/releases/latest" --jq .tag_name)"
+          fi
+
+          if [[ ! "${upstream_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]; then
+            echo "Unexpected upstream tag: ${upstream_tag}" >&2
+            exit 1
+          fi
+
+          release_tag="macos-${upstream_tag}"
+          existing_id="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq ".[] | select(.tag_name == \"${release_tag}\") | .id" \
+              | head -n 1
+          )"
+
+          should_build=true
+          if [[ -n "${existing_id}" && "${FORCE_BUILD}" != "true" ]]; then
+            should_build=false
+            echo "${release_tag} already exists; nothing to rebuild."
+          fi
+
+          echo "upstream_tag=${upstream_tag}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "should_build=${should_build}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Build unsigned Apple Silicon app
+    needs: detect
+    if: needs.detect.outputs.should_build == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Check out desktop fork
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Merge the upstream release
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --force upstream \
+            "refs/heads/main:refs/remotes/upstream/main" \
+            "refs/tags/${UPSTREAM_TAG}:refs/tags/upstream/${UPSTREAM_TAG}"
+
+          if ! git merge-base --is-ancestor \
+            "refs/tags/upstream/${UPSTREAM_TAG}^{commit}" \
+            refs/remotes/upstream/main; then
+            echo "${UPSTREAM_TAG} is not reachable from upstream main." >&2
+            exit 1
+          fi
+
+          # Prefer upstream for overlapping source hunks, then reapply the
+          # small, explicit desktop manifest/runtime overlay below.
+          git merge --no-edit -X theirs "refs/tags/upstream/${UPSTREAM_TAG}^{commit}"
+          node .github/scripts/apply-desktop-overlay.mjs
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run tests
+        run: |
+          mkdir -p "${RUNNER_TEMP}/pi-agent-test"
+          PI_CODING_AGENT_DIR="${RUNNER_TEMP}/pi-agent-test" npm test
+
+      - name: Type-check
+        run: npx tsc --noEmit --incremental false
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build web application
+        run: npm run build
+
+      - name: Package app
+        run: npx electron-builder --mac dmg zip --arm64
+
+      - name: Verify package files
+        run: |
+          set -euo pipefail
+          test -d "dist-electron/mac-arm64/Pi Web.app"
+          test -n "$(find dist-electron -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$(find dist-electron -maxdepth 1 -name '*.zip' -print -quit)"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pi-Web-${{ needs.detect.outputs.upstream_tag }}-macOS-arm64
+          path: |
+            dist-electron/*.dmg
+            dist-electron/*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-draft:
+    name: Publish unsigned draft
+    needs: [detect, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
+      RELEASE_TAG: ${{ needs.detect.outputs.release_tag }}
+    steps:
+      - name: Download verified build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Pi-Web-${{ needs.detect.outputs.upstream_tag }}-macOS-arm64
+          path: release-assets
+
+      - name: Create or update draft release
+        run: |
+          set -euo pipefail
+          notes="${RUNNER_TEMP}/release-notes.md"
+
+          {
+            echo "Automated Apple Silicon build of [${UPSTREAM_REPOSITORY} ${UPSTREAM_TAG}](https://github.com/${UPSTREAM_REPOSITORY}/releases/tag/${UPSTREAM_TAG})."
+            echo
+            echo "- Desktop wrapper commit: \`${GITHUB_SHA}\`"
+            echo "- Developer ID signed and notarized: \`false\`"
+            echo
+            echo "This release is unsigned and remains a draft. Sign and notarize it in a protected release process before public distribution."
+          } > "${notes}"
+
+          assets=(release-assets/*.dmg release-assets/*.zip)
+          existing_id="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq ".[] | select(.tag_name == \"${RELEASE_TAG}\") | .id" \
+              | head -n 1
+          )"
+
+          if [[ -n "${existing_id}" ]]; then
+            gh release edit "${RELEASE_TAG}" --draft --notes-file "${notes}"
+            gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
+          else
+            gh release create "${RELEASE_TAG}" "${assets[@]}" \
+              --draft \
+              --target "${GITHUB_SHA}" \
+              --title "Pi Web for macOS (${UPSTREAM_TAG})" \
+              --notes-file "${notes}"
+          fi
