@@ -38,8 +38,8 @@
     "lint": "eslint .",
     "test": "node --experimental-strip-types --test \"app/**/*.test.mjs\" \"components/**/*.test.mjs\" \"electron/**/*.test.cjs\" \"hooks/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"public/**/*.test.mjs\"",
     "electron:dev": "electron .",
-    "electron:pack": "npm run build && electron-builder --mac dir",
-    "electron:dist": "npm run build && electron-builder --mac dmg zip",
+    "electron:pack": "npm run build && electron-builder --mac dir --publish never",
+    "electron:dist": "npm run build && electron-builder --mac dmg zip --publish never",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
   "dependencies": {

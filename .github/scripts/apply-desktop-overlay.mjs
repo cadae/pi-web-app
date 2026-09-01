@@ -40,8 +40,8 @@ if (!packageJson.scripts.test?.includes(electronTest)) {
 }
 Object.assign(packageJson.scripts, {
   "electron:dev": "electron .",
-  "electron:pack": "npm run build && electron-builder --mac dir",
-  "electron:dist": "npm run build && electron-builder --mac dmg zip",
+  "electron:pack": "npm run build && electron-builder --mac dir --publish never",
+  "electron:dist": "npm run build && electron-builder --mac dmg zip --publish never",
 });
 
 packageJson.dependencies ??= {};

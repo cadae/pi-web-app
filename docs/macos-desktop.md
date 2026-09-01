@@ -95,9 +95,11 @@ repository or organization policy to allow `contents: write` for its
 The automated build is deliberately unsigned. Newly released upstream code and
 its install scripts do not receive Apple signing credentials or a repository
 write token. The separate draft-publishing job does not execute the app or its
-source. Signing and notarization should be a protected release step after the
-upstream diff and unsigned artifact have been reviewed; the draft must not be
-published as a normal download before that step is complete.
+source. The packaging command also explicitly disables electron-builder's
+legacy CI auto-publishing behavior. Signing and notarization should be a
+protected release step after the upstream diff and unsigned artifact have been
+reviewed; the draft must not be published as a normal download before that step
+is complete.
 
 An upstream release is not guaranteed to remain desktop-compatible forever.
 The overlay is intentionally small and idempotent, but a renamed entry point,

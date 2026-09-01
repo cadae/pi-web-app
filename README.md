@@ -169,7 +169,8 @@ Successful packages are uploaded as a 30-day Actions artifact and attached to
 an unsigned **draft** GitHub Release. They are not automatically published.
 The build job has read-only repository access and receives no Apple signing
 credentials; signing and notarization are intentionally reserved for a
-separate, reviewed release step. A downloaded unsigned build can be opened on
+separate, reviewed release step. Electron-builder's implicit CI publishing is
+explicitly disabled in that job. A downloaded unsigned build can be opened on
 your own Mac using **System Settings > Privacy & Security > Open Anyway**, but
 normal public distribution requires Developer ID signing and notarization.
 

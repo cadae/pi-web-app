@@ -136,7 +136,9 @@ jobs:
         run: npm run build
 
       - name: Package app
-        run: npx electron-builder --mac dmg zip --arm64
+        # electron-builder v26 otherwise infers publishing from the CI
+        # environment. Publishing belongs only to the isolated job below.
+        run: npx electron-builder --mac dmg zip --arm64 --publish never
 
       - name: Verify package files
         run: |
