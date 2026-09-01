@@ -151,8 +151,35 @@ npm run electron:pack  # unsigned local .app in dist-electron/mac-arm64/
 npm run electron:dist  # DMG and ZIP; signing uses the configured Apple identity
 ```
 
+The desktop package uses a dedicated 1024px macOS squircle icon so its visual
+bounds are consistent between the Dock and Launchpad. The Electron wrapper
+bundles its own Node/npm/Pi runtime; it still reads your existing Pi credentials
+and sessions from `~/.pi/agent`.
+
+#### Automated macOS builds
+
+[`Build macOS app for upstream release`](./.github/workflows/upstream-macos-release.yml)
+checks `agegr/pi-web` for a new stable release every six hours and can also be
+started manually from the repository's **Actions** tab. For each upstream tag
+reachable from `main`, it reapplies the desktop overlay, runs tests,
+type-checking, lint, and the production build, then creates Apple Silicon DMG
+and ZIP files.
+
+Successful packages are uploaded as a 30-day Actions artifact and attached to
+an unsigned **draft** GitHub Release. They are not automatically published.
+The build job has read-only repository access and receives no Apple signing
+credentials; signing and notarization are intentionally reserved for a
+separate, reviewed release step. A downloaded unsigned build can be opened on
+your own Mac using **System Settings > Privacy & Security > Open Anyway**, but
+normal public distribution requires Developer ID signing and notarization.
+
+The workflow stops without creating a draft if an upstream release no longer
+applies cleanly or fails verification. A maintainer can use its `upstream_tag`
+input to build an older main-branch release, or `force` to replace an existing
+draft build.
+
 See [macOS desktop packaging](./docs/macos-desktop.md) for architecture,
-security, signing, and release details.
+security, icon generation, signing, Gatekeeper, and release details.
 
 Contributor guides: [Internationalization](./docs/i18n.md) and [Release process](./docs/release.md).
 
