@@ -196,10 +196,16 @@ jobs:
           )"
 
           if [[ -n "${existing_id}" ]]; then
-            gh release edit "${RELEASE_TAG}" --draft --notes-file "${notes}"
-            gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
+            gh release edit "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --draft \
+              --notes-file "${notes}"
+            gh release upload "${RELEASE_TAG}" "${assets[@]}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
           else
             gh release create "${RELEASE_TAG}" "${assets[@]}" \
+              --repo "${GITHUB_REPOSITORY}" \
               --draft \
               --target "${GITHUB_SHA}" \
               --title "Pi Web for macOS (${UPSTREAM_TAG})" \
