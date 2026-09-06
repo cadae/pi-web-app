@@ -38,9 +38,11 @@
     "lint": "eslint .",
     "test": "node --experimental-strip-types --test \"app/**/*.test.mjs\" \"components/**/*.test.mjs\" \"electron/**/*.test.cjs\" \"hooks/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"public/**/*.test.mjs\"",
     "electron:dev": "electron .",
-    "electron:pack": "npm run build && electron-builder --mac dir --publish never",
-    "electron:dist": "npm run build && electron-builder --mac dmg zip --publish never",
-    "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
+    "electron:pack": "npm run electron:build && electron-builder --mac dir --publish never && npm run electron:smoke",
+    "electron:dist": "npm run electron:build && electron-builder --mac dmg zip --publish never && npm run electron:smoke",
+    "electron:smoke": "node electron/smoke-package.cjs",
+    "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public",
+    "electron:build": "PI_WEB_DESKTOP_BUILD=1 npm run build"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.3",
@@ -60,6 +62,7 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "abbrev": "4.0.0",
     "@tailwindcss/postcss": "^4.2.2",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^25",
@@ -92,34 +95,28 @@
     "productName": "Pi Web",
     "artifactName": "${productName}-${version}-${arch}.${ext}",
     "asar": true,
-    "asarUnpack": [
-      ".next/**/*",
-      "bin/**/*",
-      "node_modules/**/*",
-      "public/**/*",
-      "next.config.ts",
-      "package.json"
-    ],
+    "afterExtract": "electron/prepare-runtime.cjs",
+    "afterPack": "electron/verify-package.cjs",
     "directories": {
       "output": "dist-electron"
     },
     "files": [
-      "electron/**/*",
-      "bin/**/*",
-      "public/**/*",
-      ".next/**/*",
-      "node_modules/**/*",
-      "next.config.ts",
+      "electron/main.cjs",
+      "electron/runtime.cjs",
+      "electron/splash.html",
+      "electron/icon.png",
       "package.json",
       "LICENSE",
-      "!.next/cache",
-      "!.next/dev",
-      "!.next/**/*.js.map",
-      "!node_modules/.cache",
-      "!node_modules/**/*.map",
-      "!node_modules/electron/**/*",
-      "!node_modules/electron-builder/**/*",
-      "!node_modules/@electron/**/*"
+      "!node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "dist-electron",
+        "to": ".",
+        "filter": [
+          "runtime/**/*"
+        ]
+      }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",

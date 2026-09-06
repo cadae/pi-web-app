@@ -56,10 +56,11 @@ function initializeLogging() {
   log("Starting", APP_NAME, app.getVersion(), process.arch);
 }
 
-async function initializeMacPath() {
+async function initializeMacPath(appRoot) {
   if (process.platform !== "darwin") return;
   try {
-    const { default: fixPath } = await import("fix-path");
+    const fixPathEntry = require.resolve("fix-path", { paths: [appRoot] });
+    const { default: fixPath } = await import(pathToFileURL(fixPathEntry).href);
     fixPath();
   } catch (error) {
     log("Could not import the login-shell PATH:", error instanceof Error ? error.message : error);
@@ -143,14 +144,16 @@ async function waitForServer(origin, timeoutMs = SERVER_START_TIMEOUT_MS) {
 }
 
 function startServer({ appRoot, development, port, runtimeBinDirectory }) {
-  const nextBin = require.resolve("next/dist/bin/next", { paths: [appRoot] });
-  const args = [
-    development ? "dev" : "start",
+  const nextBin = development
+    ? require.resolve("next/dist/bin/next", { paths: [appRoot] })
+    : path.join(appRoot, "server.js");
+  const args = development ? [
+    "dev",
     "-H",
     HOSTNAME,
     "-p",
     String(port),
-  ];
+  ] : [];
 
   const environment = buildServerEnvironment(process.env, {
     appRoot,
@@ -222,7 +225,7 @@ function splashPath() {
 }
 
 function appIconPath() {
-  return path.join(__dirname, "..", "public", "icons", "icon-512.png");
+  return path.join(__dirname, "icon.png");
 }
 
 function openExternal(rawUrl) {
@@ -249,6 +252,7 @@ function configureWindowSecurity(window) {
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: true,
+            spellcheck: false,
           },
         },
       };
@@ -271,6 +275,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      spellcheck: false,
     },
   });
 
@@ -334,16 +339,18 @@ async function bootstrap() {
   initializeLogging();
   installApplicationMenu();
   configureSessionSecurity();
-  if (process.platform === "darwin") {
+  // Installed apps use the bundle's multi-resolution ICNS everywhere. Only
+  // development needs an override because it otherwise shows Electron's icon.
+  if (process.platform === "darwin" && !app.isPackaged) {
     app.dock.setIcon(nativeImage.createFromPath(appIconPath()));
   }
 
   const window = createWindow();
-  await initializeMacPath();
   const development = !app.isPackaged;
   const appRoot = development
     ? app.getAppPath()
-    : path.join(process.resourcesPath, "app.asar.unpacked");
+    : path.join(process.resourcesPath, "runtime");
+  await initializeMacPath(appRoot);
   const runtimeBinDirectory = createRuntimeBinDirectory(appRoot);
   const port = development
     ? parsePort(process.env.PI_WEB_DESKTOP_PORT, DEFAULT_DEVELOPMENT_PORT)

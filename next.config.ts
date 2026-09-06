@@ -12,6 +12,11 @@ try {
 } catch { /* package not found, use default */ }
 
 const nextConfig: NextConfig = {
+  // Desktop builds carry a traced server, not the development toolchain.
+  ...(process.env.PI_WEB_DESKTOP_BUILD === "1" ? {
+    output: "standalone" as const,
+    cacheMaxMemorySize: 8 * 1024 * 1024,
+  } : {}),
   outputFileTracingRoot: configDir,
   serverExternalPackages: [
     "undici",

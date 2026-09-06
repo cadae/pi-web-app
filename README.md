@@ -151,10 +151,16 @@ npm run electron:pack  # unsigned local .app in dist-electron/mac-arm64/
 npm run electron:dist  # DMG and ZIP; signing uses the configured Apple identity
 ```
 
-The desktop package uses a dedicated 1024px macOS squircle icon so its visual
-bounds are consistent between the Dock and Launchpad. The Electron wrapper
-bundles its own Node/npm/Pi runtime; it still reads your existing Pi credentials
-and sessions from `~/.pi/agent`.
+The desktop package uses one macOS squircle icon: installed Dock and Launchpad
+icons both come from the bundle's multi-resolution ICNS. The development window
+uses the same 1024px source artwork.
+
+Desktop builds package Next.js's traced standalone server instead of the full
+web development dependency tree. Pi's dynamic runtime assets and bundled
+Node/npm tools are retained; credentials and sessions stay in `~/.pi/agent`.
+The desktop server's in-memory response cache is capped at 8 MiB, and browser
+spellchecking is disabled. These changes reduce overhead, but Electron still
+includes Chromium and actual RAM usage depends on active sessions.
 
 #### Automated macOS builds
 
@@ -163,7 +169,10 @@ checks `agegr/pi-web` for a new stable release every six hours and can also be
 started manually from the repository's **Actions** tab. For each upstream tag
 reachable from `main`, it reapplies the desktop overlay, runs tests,
 type-checking, lint, and the production build, then creates Apple Silicon DMG
-and ZIP files.
+and ZIP files. It also smoke-tests the packaged terminal with the app's own
+Electron/Node runtime before uploading artifacts. Native dependencies are
+rebuilt for Electron and copied after rebuilding, including the terminal's
+executable helper.
 
 Successful packages are uploaded as a 30-day Actions artifact and attached to
 an unsigned **draft** GitHub Release. They are not automatically published.

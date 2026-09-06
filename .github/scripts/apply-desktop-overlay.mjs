@@ -1,5 +1,6 @@
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const root = path.resolve(process.argv[2] ?? process.cwd());
 const packagePath = path.join(root, "package.json");
@@ -18,6 +19,10 @@ for (const required of [
   "electron/runtime.cjs",
   "electron/splash.html",
   "electron/icon.png",
+  "electron/build-config.cjs",
+  "electron/prepare-runtime.cjs",
+  "electron/verify-package.cjs",
+  "electron/smoke-package.cjs",
 ]) {
   await access(path.join(root, required));
 }
@@ -40,8 +45,10 @@ if (!packageJson.scripts.test?.includes(electronTest)) {
 }
 Object.assign(packageJson.scripts, {
   "electron:dev": "electron .",
-  "electron:pack": "npm run build && electron-builder --mac dir --publish never",
-  "electron:dist": "npm run build && electron-builder --mac dmg zip --publish never",
+  "electron:build": "PI_WEB_DESKTOP_BUILD=1 npm run build",
+  "electron:pack": "npm run electron:build && electron-builder --mac dir --publish never && npm run electron:smoke",
+  "electron:dist": "npm run electron:build && electron-builder --mac dmg zip --publish never && npm run electron:smoke",
+  "electron:smoke": "node electron/smoke-package.cjs",
 });
 
 packageJson.dependencies ??= {};
@@ -49,52 +56,29 @@ packageJson.dependencies["fix-path"] = "^5.0.0";
 packageJson.dependencies.npm = "11.19.1";
 
 packageJson.devDependencies ??= {};
+// The upstream-merged lock can retain hoisted nopt without its abbrev edge
+// (npm also bundles a private copy). Keep node-gyp's dependency resolvable.
+packageJson.devDependencies.abbrev = "4.0.0";
 packageJson.devDependencies.electron = "^44.1.0";
 packageJson.devDependencies["electron-builder"] = "^26.15.3";
 
-packageJson.build = {
-  appId: "com.cadae.piwebapp",
-  productName: "Pi Web",
-  artifactName: "${productName}-${version}-${arch}.${ext}",
-  asar: true,
-  asarUnpack: [
-    ".next/**/*",
-    "bin/**/*",
-    "node_modules/**/*",
-    "public/**/*",
-    "next.config.ts",
-    "package.json",
-  ],
-  directories: {
-    output: "dist-electron",
-  },
-  files: [
-    "electron/**/*",
-    "bin/**/*",
-    "public/**/*",
-    ".next/**/*",
-    "node_modules/**/*",
-    "next.config.ts",
-    "package.json",
-    "LICENSE",
-    "!.next/cache",
-    "!.next/dev",
-    "!.next/**/*.js.map",
-    "!node_modules/.cache",
-    "!node_modules/**/*.map",
-    "!node_modules/electron/**/*",
-    "!node_modules/electron-builder/**/*",
-    "!node_modules/@electron/**/*",
-  ],
-  mac: {
-    category: "public.app-category.developer-tools",
-    hardenedRuntime: true,
-    icon: "electron/icon.png",
-    target: ["dmg", "zip"],
-  },
-};
+packageJson.build = (await import(pathToFileURL(path.join(root, "electron/build-config.cjs")))).default;
 
 await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+
+// Reapply desktop-only output settings if an upstream merge replaced the config.
+const configPath = path.join(root, "next.config.ts");
+let configSource = await readFile(configPath, "utf8");
+if (!configSource.includes('process.env.PI_WEB_DESKTOP_BUILD === "1"')) {
+  const marker = "const nextConfig: NextConfig = {\n";
+  if (!configSource.includes(marker)) throw new Error("Could not locate the Next.js config insertion point");
+  configSource = configSource.replace(marker, marker +
+    '  ...(process.env.PI_WEB_DESKTOP_BUILD === "1" ? {\n' +
+    '    output: "standalone" as const,\n' +
+    '    cacheMaxMemorySize: 8 * 1024 * 1024,\n' +
+    '  } : {}),\n');
+  await writeFile(configPath, configSource);
+}
 
 let npxSource = await readFile(npxPath, "utf8");
 const bundledNpx = 'join(process.cwd(), "node_modules", "npm", "bin", "npx-cli.js")';

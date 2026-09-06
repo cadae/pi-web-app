@@ -11,7 +11,7 @@ The app keeps Pi's existing storage contract:
 - project files stay in their original working directories,
 - the signed app bundle is treated as read-only; Electron host code is kept in
   `app.asar` while the Next.js server/runtime payload is placed in
-  `app.asar.unpacked` for subprocess execution,
+  `Contents/Resources/runtime` for subprocess execution,
 - a small `node` shim is created under Electron's user-data directory so
   bundled npm/Pi commands can use Electron's embedded Node runtime.
 
@@ -48,12 +48,57 @@ Intel artifacts on matching runners so architecture-specific Sharp and
 clipboard dependencies are installed and tested for each target.
 
 The macOS package uses a dedicated 1024px squircle icon at
-`electron/icon.png`, rather than the edge-to-edge PWA speech-bubble asset. To
+`electron/icon.png`, rather than the edge-to-edge PWA speech-bubble asset.
+Electron-builder converts it to a multi-resolution ICNS for Finder, Launchpad,
+and the Dock. Installed apps do not override the Dock icon at runtime; development
+uses the same PNG instead of Electron's default icon. To
 recreate it from the original Pi artwork after an upstream icon change, run:
 
 ```bash
 swift electron/generate-icon.swift public/icons/icon-512.png electron/icon.png
 ```
+
+The artwork inside this canvas is still raster artwork; a larger canvas does
+not add source detail. A future vector master could improve small-size clarity.
+
+## Package size and memory
+
+`npm run electron:build` enables standalone output and the desktop-only 8 MiB
+Next.js incremental cache limit (the normal web build keeps Next's defaults).
+`electron:pack` and `electron:dist` run this automatically. Before packaging,
+`electron/prepare-runtime.cjs` stages `.next/standalone`, static files and public
+assets in `dist-electron/runtime`. Electron-builder copies that directory once
+into `Contents/Resources/runtime`; the original root `node_modules` is excluded.
+The desktop starts the generated `server.js` directly, without loading the Next
+CLI or transpiling `next.config.ts` at launch.
+
+An after-pack check compares all staged runtime paths and file sizes with the
+finished bundle, verifies critical entry points and the desktop configuration,
+and rejects duplicate dependencies in `app.asar`. Its logical-size report is
+written to `dist-electron/package-report.json`. This is a packaging check, not
+a substitute for launching the app and testing sessions/tools.
+
+Static tracing cannot reliably discover Pi's extension loaders, CLI entry points,
+HTML export templates or npm commands. The staging step therefore preserves the
+complete installed production dependency trees for the Pi packages, npm and
+fix-path, including nested versions, installed optional packages, licenses and
+native/WASM resources. It omits source maps and environment files. It does not
+strip arbitrary package assets or mutate the source `node_modules` directory.
+
+Memory changes are deliberately conservative: the response cache ceiling is
+lower and browser spellchecking is off in app windows. Active agents are not
+suspended or given restrictive heap limits, and closing the last macOS window
+still leaves the backend running until Quit. Electron/Chromium remains the
+largest fixed runtime cost. The cache limit is a ceiling, not a promise of
+42 MiB lower idle RAM; live idle/active measurements and functional testing are
+still required after building.
+
+For the Apple Silicon 0.8.11 build measured on 2026-09-04, uncompressed bundle
+file bytes decreased from 579.9 MiB (previous GitHub release ZIP) to 475.8 MiB
+(18% smaller); the ZIP decreased from 211.6 to 182.1 MiB (14% smaller).
+Filesystem allocation is different: the new local app occupies about 563 MiB
+because of allocation overhead for many small files. These are build-size
+measurements, not measured RAM savings or a completed runtime acceptance test.
 
 ## Signing and notarization
 
@@ -79,7 +124,7 @@ is required. For a version that has not been built, the workflow:
    overlay,
 3. installs dependencies and runs tests, type-checking, lint, and the Next.js
    production build,
-4. creates Apple Silicon DMG and ZIP files, and
+4. creates Apple Silicon DMG and ZIP files and smoke-tests the packaged terminal, and
 5. uploads the files as an Actions artifact and to a draft GitHub Release.
 
 The draft is the build marker, so later scheduled runs skip the same upstream
@@ -106,6 +151,35 @@ The overlay is intentionally small and idempotent, but a renamed entry point,
 changed test layout, incompatible dependency, or Electron/Next.js change can
 still require an update. In that case the workflow fails before creating the
 draft instead of silently publishing an unverified app.
+
+### Native terminal build verification
+
+Upstream v0.9.0 introduced `node-pty`. The upstream-merged lockfile can leave
+the build toolchain's hoisted `nopt` unable to resolve `abbrev`, even though npm
+has a private bundled copy. The desktop overlay explicitly pins `abbrev@4.0.0`
+as a build dependency. CI loads the same `node-gyp` used by Electron's rebuild
+before running the expensive build steps, so this failure is caught early.
+
+Keep Electron's native rebuild enabled. Runtime staging runs afterward and
+copies the complete rebuilt `node-pty` package over the earlier Next.js trace;
+it requires `build/Release/pty.node` and makes the staged macOS `spawn-helper`
+executable. This avoids shipping stale traced binaries or a missing helper.
+
+`npm run electron:pack` and `npm run electron:dist` finish by running
+`npm run electron:smoke`; CI runs it explicitly after packaging. To check a
+different package, run `npm run electron:smoke -- "/path/to/Pi Web.app"`.
+The check uses the packaged Electron executable with `ELECTRON_RUN_AS_NODE`,
+loads the rebuilt native binary from inside the app, starts a disposable shell
+PTY, resizes it, writes input, and checks output and exit status. It does not
+load Pi credentials, user sessions, or shell startup files. Releases predating
+the terminal report that the feature is absent. This check complements the
+static `package-report.json`; it does not replace UI/session acceptance tests.
+
+Validated locally against upstream v0.9.0 on 2026-09-06: 963 tests passed,
+type-check and lint passed, the unsigned Apple Silicon DMG/ZIP build completed,
+the packaged PTY passed under Electron 44.1.0 / embedded Node 24.19.0, and both
+archive integrity checks passed. This does not claim GitHub execution,
+signing/notarization, or full UI acceptance testing.
 
 Before publishing, verify:
 

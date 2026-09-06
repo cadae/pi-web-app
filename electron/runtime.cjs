@@ -28,6 +28,9 @@ function buildServerEnvironment(baseEnvironment, options) {
   environment.ELECTRON_RUN_AS_NODE = "1";
   environment.PI_WEB_DESKTOP = "1";
   environment.PI_WEB_HOSTNAME = options.hostname;
+  // Next's generated standalone server reads HOSTNAME (not PI_WEB_HOSTNAME).
+  // Override ambient host settings so packaged builds remain loopback-only.
+  environment.HOSTNAME = options.hostname;
   environment.PI_WEB_NO_OPEN = "1";
   environment.PORT = String(options.port);
   if (options.production) environment.NODE_ENV = "production";

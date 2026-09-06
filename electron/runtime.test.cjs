@@ -29,7 +29,7 @@ test("prependPath keeps runtime tools first and removes duplicates", () => {
 
 test("desktop server environment is loopback-only and does not inherit web auth", () => {
   const environment = buildServerEnvironment(
-    { PATH: "/usr/bin", PI_WEB_PASSWORD: "secret", CUSTOM: "preserved" },
+    { PATH: "/usr/bin", PI_WEB_PASSWORD: "secret", HOSTNAME: "0.0.0.0", CUSTOM: "preserved" },
     {
       appRoot: "/Applications/Pi Web.app/Contents/Resources/app",
       hostname: "127.0.0.1",
@@ -41,6 +41,7 @@ test("desktop server environment is loopback-only and does not inherit web auth"
 
   assert.equal(environment.PI_WEB_PASSWORD, undefined);
   assert.equal(environment.PI_WEB_HOSTNAME, "127.0.0.1");
+  assert.equal(environment.HOSTNAME, "127.0.0.1");
   assert.equal(environment.PI_WEB_NO_OPEN, "1");
   assert.equal(environment.ELECTRON_RUN_AS_NODE, "1");
   assert.equal(environment.NODE_ENV, "production");

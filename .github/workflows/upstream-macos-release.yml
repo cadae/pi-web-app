@@ -121,6 +121,11 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Verify native build toolchain
+        # Exercise the same node-gyp resolution used by Electron's rebuild,
+        # before spending time on tests and the web build.
+        run: node -e 'const {createRequire}=require("node:module"); createRequire(require.resolve("@electron/rebuild"))("node-gyp"); console.log("Native build toolchain OK")'
+
       - name: Run tests
         run: |
           mkdir -p "${RUNNER_TEMP}/pi-agent-test"
@@ -133,7 +138,7 @@ jobs:
         run: npm run lint
 
       - name: Build web application
-        run: npm run build
+        run: npm run electron:build
 
       - name: Package app
         # electron-builder v26 otherwise infers publishing from the CI
@@ -146,6 +151,11 @@ jobs:
           test -d "dist-electron/mac-arm64/Pi Web.app"
           test -n "$(find dist-electron -maxdepth 1 -name '*.dmg' -print -quit)"
           test -n "$(find dist-electron -maxdepth 1 -name '*.zip' -print -quit)"
+
+      - name: Smoke-test packaged terminal
+        # Runs a disposable PTY with the app's embedded Electron/Node, never
+        # the runner's Node or the user's Pi sessions and credentials.
+        run: npm run electron:smoke
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
