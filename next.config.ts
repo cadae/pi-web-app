@@ -19,6 +19,7 @@ const nextConfig: NextConfig = {
   } : {}),
   outputFileTracingRoot: configDir,
   serverExternalPackages: [
+    "node-pty",
     "undici",
     "web-push",
     "@earendil-works/pi-coding-agent",
