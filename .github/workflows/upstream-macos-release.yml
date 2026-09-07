@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       upstream_tag:
-        description: "Upstream main-branch release tag (blank means latest stable)"
+        description: "Stable upstream release to sync (blank means latest; no downgrades)"
         required: false
         type: string
       force:
@@ -35,7 +35,16 @@ jobs:
       should_build: ${{ steps.release.outputs.should_build }}
       upstream_tag: ${{ steps.release.outputs.upstream_tag }}
       release_tag: ${{ steps.release.outputs.release_tag }}
+      base_sha: ${{ steps.release.outputs.base_sha }}
+      upstream_sha: ${{ steps.release.outputs.upstream_sha }}
+      publish_needed: ${{ steps.release.outputs.publish_needed }}
     steps:
+      - name: Check out current main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+
       - name: Resolve upstream release
         id: release
         env:
@@ -47,10 +56,15 @@ jobs:
 
           if [[ -n "${REQUESTED_TAG}" ]]; then
             upstream_tag="${REQUESTED_TAG}"
-            gh api "repos/${UPSTREAM_REPOSITORY}/releases/tags/${upstream_tag}" >/dev/null
           else
             upstream_tag="$(gh api "repos/${UPSTREAM_REPOSITORY}/releases/latest" --jq .tag_name)"
           fi
+
+          stable="$(gh api "repos/${UPSTREAM_REPOSITORY}/releases/tags/${upstream_tag}" --jq '(.draft == false) and (.prerelease == false)')"
+          test "${stable}" = true
+          upstream_sha="$(gh api "repos/${UPSTREAM_REPOSITORY}/commits/${upstream_tag}" --jq .sha)"
+          base_sha="$(git rev-parse HEAD)"
+          synced_sha="$(node -e 'const fs=require("fs"); const p=".github/upstream-release.json"; console.log(fs.existsSync(p) ? JSON.parse(fs.readFileSync(p)).upstream_commit : "")')"
 
           if [[ ! "${upstream_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]; then
             echo "Unexpected upstream tag: ${upstream_tag}" >&2
@@ -65,11 +79,18 @@ jobs:
           )"
 
           should_build=true
+          publish_needed=true
           if [[ -n "${existing_id}" && "${FORCE_BUILD}" != "true" ]]; then
+            publish_needed=false
+          fi
+          if [[ "${publish_needed}" = false && "${synced_sha}" = "${upstream_sha}" ]]; then
             should_build=false
-            echo "${release_tag} already exists; nothing to rebuild."
+            echo "${release_tag} already exists and main is synced; nothing to rebuild."
           fi
 
+          echo "base_sha=${base_sha}" >> "${GITHUB_OUTPUT}"
+          echo "upstream_sha=${upstream_sha}" >> "${GITHUB_OUTPUT}"
+          echo "publish_needed=${publish_needed}" >> "${GITHUB_OUTPUT}"
           echo "upstream_tag=${upstream_tag}" >> "${GITHUB_OUTPUT}"
           echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
           echo "should_build=${should_build}" >> "${GITHUB_OUTPUT}"
@@ -80,13 +101,18 @@ jobs:
     if: needs.detect.outputs.should_build == 'true'
     runs-on: macos-15
     timeout-minutes: 60
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
     env:
       UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
+      UPSTREAM_SHA: ${{ needs.detect.outputs.upstream_sha }}
+      BASE_SHA: ${{ needs.detect.outputs.base_sha }}
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - name: Check out desktop fork
         uses: actions/checkout@v5
         with:
+          ref: ${{ needs.detect.outputs.base_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -106,6 +132,7 @@ jobs:
             "refs/heads/main:refs/remotes/upstream/main" \
             "refs/tags/${UPSTREAM_TAG}:refs/tags/upstream/${UPSTREAM_TAG}"
 
+          test "$(git rev-parse "refs/tags/upstream/${UPSTREAM_TAG}^{commit}")" = "${UPSTREAM_SHA}"
           if ! git merge-base --is-ancestor \
             "refs/tags/upstream/${UPSTREAM_TAG}^{commit}" \
             refs/remotes/upstream/main; then
@@ -113,13 +140,35 @@ jobs:
             exit 1
           fi
 
-          # Prefer upstream for overlapping source hunks, then reapply the
-          # small, explicit desktop manifest/runtime overlay below.
-          git merge --no-edit -X theirs "refs/tags/upstream/${UPSTREAM_TAG}^{commit}"
+          if [[ -f .github/upstream-release.json ]]; then
+            previous_sha="$(node -p 'JSON.parse(require("fs").readFileSync(".github/upstream-release.json")).upstream_commit')"
+            git merge-base --is-ancestor "${previous_sha}" "${UPSTREAM_SHA}" || {
+              echo "Refusing an upstream downgrade or rewritten release history." >&2
+              exit 1
+            }
+          fi
+
+          # Keep upstream ancestry while preserving the fork-owned automation,
+          # desktop host and documentation. Never execute merged workflow code.
+          git merge --no-commit --no-ff -X theirs "${UPSTREAM_SHA}"
+          git restore --source="${BASE_SHA}" --staged --worktree -- \
+            .github electron README.md docs/macos-desktop.md
           node .github/scripts/apply-desktop-overlay.mjs
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+
+      - name: Freeze candidate source
+        id: source
+        run: |
+          set -euo pipefail
+          node .github/scripts/release-sync.mjs record
+          git diff --exit-code "${BASE_SHA}" -- .github/workflows .github/scripts electron README.md docs/macos-desktop.md
+          git add package.json package-lock.json next.config.ts lib/npx.ts .github/upstream-release.json
+          if ! git diff --cached --quiet || [[ -f .git/MERGE_HEAD ]]; then
+            git commit -m "Sync upstream ${UPSTREAM_TAG} with desktop overlay"
+          fi
+          echo "source_sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
 
       - name: Verify native build toolchain
         # Exercise the same node-gyp resolution used by Electron's rebuild,
@@ -167,9 +216,74 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Export tested source
+        run: |
+          set -euo pipefail
+          git diff --exit-code HEAD
+          git bundle create "${RUNNER_TEMP}/tested-source.bundle" HEAD
+
+      - name: Upload tested source
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-source
+          path: ${{ runner.temp }}/tested-source.bundle
+          retention-days: 7
+
+  sync-main:
+    name: Advance main to tested release
+    needs: [detect, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      BASE_SHA: ${{ needs.detect.outputs.base_sha }}
+      SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+      UPSTREAM_SHA: ${{ needs.detect.outputs.upstream_sha }}
+      UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
+    steps:
+      - name: Check out trusted workflow source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.detect.outputs.base_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download tested source
+        uses: actions/download-artifact@v4
+        with:
+          name: tested-source
+          path: ${{ runner.temp }}/tested-source
+
+      - name: Verify candidate without executing it
+        run: |
+          set -euo pipefail
+          git bundle verify "${RUNNER_TEMP}/tested-source/tested-source.bundle"
+          git fetch "${RUNNER_TEMP}/tested-source/tested-source.bundle" HEAD
+          test "$(git rev-parse FETCH_HEAD)" = "${SOURCE_SHA}"
+          node .github/scripts/release-sync.mjs verify
+
+      - name: Push tested commit without force
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          if [[ "${current_sha}" = "${SOURCE_SHA}" ]]; then exit 0; fi
+          if [[ "${current_sha}" != "${BASE_SHA}" ]]; then
+            echo "main changed during the build; rerun against the new main." >&2
+            exit 1
+          fi
+          # Token is scoped to this step; no upstream scripts or install hooks run.
+          auth="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          echo "::add-mask::${auth}"
+          git -c core.hooksPath=/dev/null \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
+            push origin "${SOURCE_SHA}:refs/heads/main"
+
   publish-draft:
     name: Publish unsigned draft
-    needs: [detect, build]
+    needs: [detect, build, sync-main]
+    if: needs.detect.outputs.publish_needed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -177,6 +291,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
       RELEASE_TAG: ${{ needs.detect.outputs.release_tag }}
+      SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
     steps:
       - name: Download verified build artifact
         uses: actions/download-artifact@v4
@@ -193,6 +308,7 @@ jobs:
             echo "Automated Apple Silicon build of [${UPSTREAM_REPOSITORY} ${UPSTREAM_TAG}](https://github.com/${UPSTREAM_REPOSITORY}/releases/tag/${UPSTREAM_TAG})."
             echo
             echo "- Desktop wrapper commit: \`${GITHUB_SHA}\`"
+            echo "- Tested synced source: \`${SOURCE_SHA}\`"
             echo "- Developer ID signed and notarized: \`false\`"
             echo
             echo "This release is unsigned and remains a draft. Sign and notarize it in a protected release process before public distribution."
@@ -217,7 +333,7 @@ jobs:
             gh release create "${RELEASE_TAG}" "${assets[@]}" \
               --repo "${GITHUB_REPOSITORY}" \
               --draft \
-              --target "${GITHUB_SHA}" \
+              --target "${SOURCE_SHA}" \
               --title "Pi Web for macOS (${UPSTREAM_TAG})" \
               --notes-file "${notes}"
           fi

@@ -124,16 +124,37 @@ is required. For a version that has not been built, the workflow:
    overlay,
 3. installs dependencies and runs tests, type-checking, lint, and the Next.js
    production build,
-4. creates Apple Silicon DMG and ZIP files and smoke-tests the packaged terminal, and
-5. uploads the files as an Actions artifact and to a draft GitHub Release.
+4. creates Apple Silicon DMG and ZIP files and smoke-tests the packaged terminal,
+5. exports the exact tested source commit to a separate write-enabled job,
+6. fast-forwards the fork's `main` to that commit without force-pushing, and
+7. attaches new release assets to an unsigned draft GitHub Release.
 
-The draft is the build marker, so later scheduled runs skip the same upstream
-version. Use the workflow's `force` input to rebuild it. A specific stable or
-older release tag can also be supplied during a manual run, provided that tag
-is reachable from upstream `main`.
+The `.github/upstream-release.json` marker on `main` records the synced upstream
+tag and commit. Scheduled runs skip only when both the release and this marker
+already exist for the selected upstream commit. An existing draft therefore
+does not block initial migration to persistent syncing. Existing assets are
+retained unless `force` is selected. Manual tags must be stable releases,
+reachable from upstream `main`, and descendants of the last synced release;
+the automation refuses downgrades or rewritten release history.
+
+Sync preserves upstream Git ancestry and restores the fork-owned `.github/`,
+`electron/`, `README.md`, and `docs/macos-desktop.md` before reapplying the desktop
+overlay. The resolved package manifest and lockfile are committed before tests.
+After testing, any tracked source modification fails the export. The write job
+imports the source bundle without checking it out or executing upstream code,
+verifies ancestry and protected paths, then pushes only the tested commit.
+If someone advances `main` during the build, sync fails safely; rerun manually
+or wait for the next scheduled run. No force-push or automatic conflict repair
+is attempted by the write job. Branch rules must permit this normal bot push;
+the workflow never bypasses them.
+
+Build, sync and draft creation are dependent jobs in one workflow; this does
+not depend on a bot push triggering a second workflow. Release publishing is
+still manual. The user's local working copy is untouched; pull the synced
+`main` before doing further local development and reinstall dependencies.
 
 The workflow must be committed to the fork's default branch, and GitHub Actions
-must be enabled for the fork. The draft-publishing job also requires the
+must be enabled for the fork. The sync and draft-publishing jobs require the
 repository or organization policy to allow `contents: write` for its
 `GITHUB_TOKEN`; all build jobs remain read-only.
 

@@ -174,6 +174,13 @@ Electron/Node runtime before uploading artifacts. Native dependencies are
 rebuilt for Electron and copied after rebuilding, including the terminal's
 executable helper.
 
+After verification, a separate job automatically updates this fork's `main`
+to the exact tested merge commit. It retains the upstream release history,
+desktop wrapper, workflow files and desktop documentation. It never force-pushes:
+if `main` changes during the build, the sync stops and retries on the next run.
+Only stable releases are synced, not every upstream commit; older releases
+cannot roll `main` back. Your local checkout is not automatically changed.
+
 Successful packages are uploaded as a 30-day Actions artifact and attached to
 an unsigned **draft** GitHub Release. They are not automatically published.
 The build job has read-only repository access and receives no Apple signing
@@ -185,8 +192,9 @@ normal public distribution requires Developer ID signing and notarization.
 
 The workflow stops without creating a draft if an upstream release no longer
 applies cleanly or fails verification. A maintainer can use its `upstream_tag`
-input to build an older main-branch release, or `force` to replace an existing
-draft build.
+input to select a stable release at or ahead of the last synced release, or
+`force` to rebuild it. An existing draft does not prevent an initial sync;
+without `force`, its existing assets are retained.
 
 See [macOS desktop packaging](./docs/macos-desktop.md) for architecture,
 security, icon generation, signing, Gatekeeper, and release details.
