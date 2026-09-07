@@ -31,6 +31,10 @@ jobs:
   detect:
     name: Detect a new stable release
     runs-on: ubuntu-latest
+    # GitHub hides draft releases from read-only tokens. This trusted job only
+    # reads API metadata and the sync marker; it runs no upstream package code.
+    permissions:
+      contents: write
     outputs:
       should_build: ${{ steps.release.outputs.should_build }}
       upstream_tag: ${{ steps.release.outputs.upstream_tag }}

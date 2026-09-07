@@ -154,9 +154,14 @@ still manual. The user's local working copy is untouched; pull the synced
 `main` before doing further local development and reinstall dependencies.
 
 The workflow must be committed to the fork's default branch, and GitHub Actions
-must be enabled for the fork. The sync and draft-publishing jobs require the
+must be enabled for the fork. The detection, sync and draft-publishing jobs require the
 repository or organization policy to allow `contents: write` for its
 `GITHUB_TOKEN`; all build jobs remain read-only.
+
+The detection job needs push-capable access because GitHub omits draft releases
+from read-only release listings. It only reads API metadata and the JSON sync
+marker, never executing upstream package code. Without this permission, an
+existing draft looks absent and every poll unnecessarily rebuilds it.
 
 The automated build is deliberately unsigned. Newly released upstream code and
 its install scripts do not receive Apple signing credentials or a repository

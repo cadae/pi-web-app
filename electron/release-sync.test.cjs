@@ -55,6 +55,7 @@ test("workflow gates main updates on verified builds and keeps write credentials
   const source = await fs.readFile(path.join(root, ".github/workflows/upstream-macos-release.yml"), "utf8");
   const workflow = yaml.load(source);
   assert.equal(workflow.permissions.contents, "read");
+  assert.equal(workflow.jobs.detect.permissions.contents, "write", "draft detection needs push access");
   assert.equal(workflow.jobs.build.permissions, undefined);
   assert.deepEqual(workflow.jobs["sync-main"].needs, ["detect", "build"]);
   assert.equal(workflow.jobs["sync-main"].permissions.contents, "write");
