@@ -180,6 +180,8 @@ desktop wrapper, workflow files and desktop documentation. It never force-pushes
 if `main` changes during the build, the sync stops and retries on the next run.
 Only stable releases are synced, not every upstream commit; older releases
 cannot roll `main` back. Your local checkout is not automatically changed.
+Modify/delete conflicts in desktop-owned files (such as excluded upstream CI
+workflows) retain the fork's version. Unresolved conflicts elsewhere stop syncing.
 
 Successful packages are uploaded as a 30-day Actions artifact and attached to
 an unsigned **draft** GitHub Release. They are not automatically published.

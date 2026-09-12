@@ -140,6 +140,11 @@ the automation refuses downgrades or rewritten release history.
 Sync preserves upstream Git ancestry and restores the fork-owned `.github/`,
 `electron/`, `README.md`, and `docs/macos-desktop.md` before reapplying the desktop
 overlay. The resolved package manifest and lockfile are committed before tests.
+The merge helper tolerates Git's conflict exit only when every unresolved path
+is inside those explicitly protected locations, then restores them from the
+selected fork commit and checks that no conflicts remain. This covers upstream
+modifying a CI workflow deliberately deleted by the fork. Conflicts outside
+that scope and non-conflict Git failures still stop before install/build/sync.
 After testing, any tracked source modification fails the export. The write job
 imports the source bundle without checking it out or executing upstream code,
 verifies ancestry and protected paths, then pushes only the tested commit.

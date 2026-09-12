@@ -154,9 +154,7 @@ jobs:
 
           # Keep upstream ancestry while preserving the fork-owned automation,
           # desktop host and documentation. Never execute merged workflow code.
-          git merge --no-commit --no-ff -X theirs "${UPSTREAM_SHA}"
-          git restore --source="${BASE_SHA}" --staged --worktree -- \
-            .github electron README.md docs/macos-desktop.md
+          node .github/scripts/merge-upstream.mjs
           node .github/scripts/apply-desktop-overlay.mjs
 
       - name: Install dependencies
