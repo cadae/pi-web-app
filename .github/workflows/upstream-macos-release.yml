@@ -167,6 +167,7 @@ jobs:
           node .github/scripts/release-sync.mjs record
           git diff --exit-code "${BASE_SHA}" -- .github/workflows .github/scripts electron README.md docs/macos-desktop.md
           git add package.json package-lock.json next.config.ts lib/npx.ts .github/upstream-release.json
+          if [[ -f lib/node-cli.ts ]]; then git add lib/node-cli.ts; fi
           if ! git diff --cached --quiet || [[ -f .git/MERGE_HEAD ]]; then
             git commit -m "Sync upstream ${UPSTREAM_TAG} with desktop overlay"
           fi

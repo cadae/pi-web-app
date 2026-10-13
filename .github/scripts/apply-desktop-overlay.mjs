@@ -80,19 +80,43 @@ if (!configSource.includes('process.env.PI_WEB_DESKTOP_BUILD === "1"')) {
   await writeFile(configPath, configSource);
 }
 
-let npxSource = await readFile(npxPath, "utf8");
-const bundledNpx = 'join(process.cwd(), "node_modules", "npm", "bin", "npx-cli.js")';
-if (!npxSource.includes(bundledNpx)) {
-  const marker = "  const candidates = [\n";
-  if (!npxSource.includes(marker)) {
-    throw new Error("Could not locate findNpxCli() in lib/npx.ts");
+// New upstream releases share npm/npx lookup in node-cli.ts. Older releases
+// locate npx in npx.ts. Both must find the app's own npm independently of a
+// separately installed Node/npm/Pi command.
+const nodeCliPath = path.join(root, "lib", "node-cli.ts");
+let nodeCliSource;
+try {
+  nodeCliSource = await readFile(nodeCliPath, "utf8");
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+}
+if (nodeCliSource !== undefined) {
+  const bundledCli = 'join(process.cwd(), "node_modules", "npm", "bin", `${name}-cli.js`)';
+  if (!nodeCliSource.includes(bundledCli)) {
+    const marker = "  const candidates = [\n";
+    if (!nodeCliSource.includes(marker)) throw new Error("Could not locate CLI candidates in lib/node-cli.ts");
+    nodeCliSource = nodeCliSource.replace(marker, marker +
+      '    // Desktop server cwd is the bundled runtime, not the workspace.\n' +
+      '    ...(process.env.PI_WEB_DESKTOP === "1" ? [\n' +
+      `      ${bundledCli},\n` +
+      '    ] : []),\n');
+    await writeFile(nodeCliPath, nodeCliSource);
   }
-  npxSource = npxSource.replace(
-    marker,
-    `${marker}    // Desktop bundle: npm is a production dependency next to the app server.\n` +
-      `    ${bundledNpx},\n`,
-  );
-  await writeFile(npxPath, npxSource);
+} else {
+  let npxSource = await readFile(npxPath, "utf8");
+  const bundledNpx = 'join(process.cwd(), "node_modules", "npm", "bin", "npx-cli.js")';
+  if (!npxSource.includes(bundledNpx)) {
+    const marker = "  const candidates = [\n";
+    if (!npxSource.includes(marker)) {
+      throw new Error("Could not locate findNpxCli() in lib/npx.ts");
+    }
+    npxSource = npxSource.replace(
+      marker,
+      `${marker}    // Desktop bundle: npm is a production dependency next to the app server.\n` +
+        `    ${bundledNpx},\n`,
+    );
+    await writeFile(npxPath, npxSource);
+  }
 }
 
 console.log(`Applied the Pi Web desktop overlay to ${root}`);

@@ -15,6 +15,13 @@ The app keeps Pi's existing storage contract:
 - a small `node` shim is created under Electron's user-data directory so
   bundled npm/Pi commands can use Electron's embedded Node runtime.
 
+Terminal `pi` and a system Node/npm installation are not prerequisites for the
+packaged app. New upstream releases use `lib/node-cli.ts` for both npm and npx;
+the desktop overlay adds the packaged npm scripts to that lookup only when
+`PI_WEB_DESKTOP=1`. Older upstream releases keep their `lib/npx.ts` adaptation.
+The Pi engine version follows the exact package versions pinned by the chosen
+upstream release (Pi Web v0.12.1 pins the Pi packages to 1.2.0).
+
 ## Development
 
 Install dependencies once, then launch the desktop host:

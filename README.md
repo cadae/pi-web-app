@@ -174,6 +174,10 @@ Electron/Node runtime before uploading artifacts. Native dependencies are
 rebuilt for Electron and copied after rebuilding, including the terminal's
 executable helper.
 
+The packaged app includes the Pi engine and npm; a terminal installation of
+`pi` is not required. The desktop overlay supports both upstream's legacy npx
+launcher and its newer shared npm/npx launcher.
+
 After verification, a separate job automatically updates this fork's `main`
 to the exact tested merge commit. It retains the upstream release history,
 desktop wrapper, workflow files and desktop documentation. It never force-pushes:
