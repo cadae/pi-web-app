@@ -52,6 +52,8 @@ const ENDPOINTS: Record<ProviderUsageId, string> = {
   minimax: "https://api.minimax.io",
   "minimax-cn": "https://api.minimaxi.com",
   "vercel-ai-gateway": "https://ai-gateway.vercel.sh/v1/credits",
+  "opencode-go": "https://opencode.ai/zen/go/v1/usage",
+  "kimi-coding": "https://api.kimi.com/coding/v1/usages",
 };
 
 const PROVIDER_NAMES: Record<ProviderUsageId, string> = {
@@ -63,6 +65,8 @@ const PROVIDER_NAMES: Record<ProviderUsageId, string> = {
   minimax: "MiniMax",
   "minimax-cn": "MiniMax CN",
   "vercel-ai-gateway": "Vercel AI Gateway",
+  "opencode-go": "OpenCode Go",
+  "kimi-coding": "Kimi For Coding",
 };
 
 const CURRENCY: Record<"moonshotai" | "moonshotai-cn" | "minimax" | "minimax-cn", string> = {
@@ -75,7 +79,10 @@ const CURRENCY: Record<"moonshotai" | "moonshotai-cn" | "minimax" | "minimax-cn"
 export async function queryProviderUsage(providerId: ProviderUsageId): Promise<ProviderUsageResult> {
   const runtime = await ModelRuntime.create({ refreshOnCreate: false });
   const provider = runtime.getProvider(providerId);
-  if (!provider || !isOfficialProviderUsageOrigin(providerId, provider.baseUrl)) {
+  // Catalog providers such as opencode-go carry their base URL per model rather than on the
+  // provider, so fall back to the first model before rejecting a non-official origin.
+  const baseUrl = provider?.baseUrl ?? provider?.getModels()[0]?.baseUrl;
+  if (!provider || !isOfficialProviderUsageOrigin(providerId, baseUrl)) {
     return { providerId, status: "query-failed", message: "The provider usage query failed." };
   }
   let resolved;
@@ -150,6 +157,8 @@ function normalize(providerId: ProviderUsageId, payload: Record<string, unknown>
     case "vercel-ai-gateway": return normalizeVercel(payload, capturedAt);
     case "moonshotai":
     case "moonshotai-cn": return normalizeMoonshot(providerId, payload, capturedAt);
+    case "opencode-go": return normalizeOpenCodeGo(payload, capturedAt);
+    case "kimi-coding": return normalizeKimiCoding(payload, capturedAt);
     case "minimax":
     case "minimax-cn": return normalizeMiniMax(providerId, payload, capturedAt);
   }
@@ -318,6 +327,79 @@ function addMiniMaxWindow(buckets: UsageBucket[], row: Record<string, unknown>, 
   buckets.push({ id: `${groupLabel}:${suffix}`, label: suffix === "weekly" ? "Weekly" : "Rolling", groupLabel, used: 100 - clamp(percent!), remaining: clamp(percent!), limit: 100, unit: "percent", ...(windowMinutes ? { windowMinutes } : {}), ...(resetsAt ? { resetsAt } : {}) });
 }
 
+function normalizeOpenCodeGo(payload: Record<string, unknown>, capturedAt: number): UsageReport {
+  // Go reports only the used percentage of each fixed window plus a reset timestamp.
+  const usage = record(payload.usage) ?? payload;
+  const labels: Record<string, string> = { rolling: "Rolling", weekly: "Weekly", monthly: "Monthly" };
+  const buckets: UsageBucket[] = [];
+  for (const [id, raw] of Object.entries(usage)) {
+    const window = record(raw);
+    if (!window) continue;
+    const percent = nonnegative(window.percent ?? window.usagePercent ?? window.usage_percent);
+    if (percent === undefined) continue;
+    const resetsAt = epochSeconds(window.resetsAt ?? window.resetAt ?? window.resets_at ?? window.reset_at);
+    buckets.push({
+      id,
+      label: labels[id] ?? id,
+      used: clamp(percent),
+      remaining: 100 - clamp(percent),
+      limit: 100,
+      unit: "percent",
+      ...(resetsAt !== undefined ? { resetsAt } : {}),
+    });
+  }
+  if (!buckets.length) throw new Error("OpenCode Go returned no usage data.");
+  return { providerId: "opencode-go", providerName: PROVIDER_NAMES["opencode-go"], capturedAt, buckets, metrics: [] };
+}
+
+const KIMI_TIME_UNIT_SECONDS = new Map([
+  ["TIME_UNIT_SECOND", 1],
+  ["TIME_UNIT_MINUTE", 60],
+  ["TIME_UNIT_HOUR", 3_600],
+  ["TIME_UNIT_DAY", 86_400],
+]);
+
+function normalizeKimiCoding(payload: Record<string, unknown>, capturedAt: number): UsageReport {
+  // Counts arrive as decimal strings. `usage` is the plan's overall quota and
+  // `limits[]` the rate-limit windows, each with its own duration.
+  const buckets: UsageBucket[] = [];
+  const addBucket = (id: string, label: string, detail: Record<string, unknown> | undefined, seconds?: number) => {
+    const limit = nonnegativeInteger(detail?.limit);
+    const used = nonnegativeInteger(detail?.used);
+    const remaining = nonnegativeInteger(detail?.remaining)
+      ?? (limit !== undefined && used !== undefined ? Math.max(0, limit - used) : undefined);
+    if (limit === undefined || remaining === undefined) return;
+    const resetsAt = epochSeconds(detail?.resetTime);
+    buckets.push({
+      id,
+      label,
+      used: used ?? Math.max(0, limit - remaining),
+      remaining,
+      limit,
+      unit: "count",
+      ...(seconds ? { windowMinutes: Math.ceil(seconds / 60) } : {}),
+      ...(resetsAt !== undefined ? { resetsAt } : {}),
+    });
+  };
+  addBucket("usage", "Overall", record(payload.usage));
+  const limits = Array.isArray(payload.limits) ? payload.limits : [];
+  limits.forEach((item, index) => {
+    const value = record(item);
+    const window = record(value?.window);
+    const duration = nonnegative(window?.duration);
+    const unitSeconds = KIMI_TIME_UNIT_SECONDS.get(stringValue(window?.timeUnit) ?? "");
+    const seconds = duration !== undefined && unitSeconds ? duration * unitSeconds : undefined;
+    addBucket(`limit-${index}`, windowLabel(seconds), record(value?.detail), seconds);
+  });
+  if (!buckets.length) throw new Error("Kimi returned no usage data.");
+  const metrics: UsageMetric[] = [];
+  const parallel = nonnegativeInteger(record(payload.parallel)?.limit);
+  if (parallel !== undefined) metrics.push({ id: "parallel", label: "Parallel requests", value: parallel, unit: "count" });
+  const level = stringValue(record(record(payload.user)?.membership)?.level);
+  if (level) metrics.push({ id: "membership", label: "Membership", value: level.replace(/^LEVEL_/u, "") });
+  return { providerId: "kimi-coding", providerName: PROVIDER_NAMES["kimi-coding"], capturedAt, buckets, metrics };
+}
+
 function windowLabel(seconds: number | undefined): string {
   if (!seconds || seconds <= 0) return "Limit";
   const minutes = Math.ceil(seconds / 60);
@@ -365,6 +447,13 @@ function decimal(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   if (typeof value === "string" && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(value) && value.length <= 64) return value;
   return undefined;
+}
+
+function epochSeconds(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.floor(value >= 1_000_000_000_000 ? value / 1_000 : value);
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1_000) : undefined;
 }
 
 function clamp(value: number): number {

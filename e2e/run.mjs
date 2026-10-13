@@ -2,15 +2,20 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { checkExtensionDialogs, extensionSource } from "./extension-dialog.mjs";
+import { checkFilePanel, filePanelFixture } from "./file-panel.mjs";
+import { checkExtensionDialogSizing, checkExtensionDialogs, extensionSource } from "./extension-dialog.mjs";
 import { checkChatAppearance } from "./chat-appearance.mjs";
+import { checkCodeBackground } from "./code-background.mjs";
+import { checkModelDiscovery } from "./model-discovery.mjs";
+import { checkFilesPlacement, showSidebarSessions } from "./sidebar.mjs";
+import { checkSessionNavigation } from "./session-navigation.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const mode = process.env.E2E_SERVER_MODE || "dev";
@@ -22,12 +27,16 @@ const agentDir = mkdtempSync(join(tmpdir(), "pi-web-e2e-"));
 const project = join(agentDir, "project");
 const sessionDir = join(agentDir, "sessions", "e2e");
 mkdirSync(project);
+const previewFile = join(project, "preview.html");
+writeFileSync(previewFile, filePanelFixture);
 mkdirSync(sessionDir, { recursive: true });
 const timestamp = "2026-08-23T00:00:00.000Z";
 const LONG = "e2e-long-session";
 const BRANCH = "e2e-branch-session";
 const RICH = "e2e-rich-session";
 const COMPACTED = "e2e-compacted-session";
+const APPEND = "e2e-external-append-session";
+const CODE_BACKGROUND = "e2e-code-background";
 const text = (i) => `E2E message ${String(i).padStart(4, "0")}`;
 const ids = (start, end) => Array.from({ length: end - start }, (_, i) => `e${start + i}`);
 
@@ -87,6 +96,14 @@ try {
       { type: "thinking", thinking: "E2E final reasoning\nFinal thinking details." },
       { type: "text", text:
         "E2E final answer\n```js\nconsole.log('E2E code');\n```\n\n"
+        + "| Kind | " + "Long headings should wrap without stretching the table. ".repeat(8) + " |\n| --- | --- |\n"
+        + "| Text | " + "Long sentences should wrap while wide tables keep their natural column widths. ".repeat(8) + " |\n"
+        + "| 中文 | " + "表格中的长句应该自然换行，多列表格仍然可以横向滚动。".repeat(12) + " |\n"
+        + "| URL | https://example.invalid/" + "long-path-segment".repeat(24) + " |\n"
+        + "| Code | `" + "long_identifier_".repeat(24) + "` |\n\n"
+        + "| " + Array.from({ length: 8 }, (_, i) => `Column ${i + 1}`).join(" | ") + " |\n"
+        + "| " + Array(8).fill("---").join(" | ") + " |\n"
+        + "| " + Array.from({ length: 8 }, (_, i) => `release-20260901-${String(i + 1).padStart(6, "0")}`).join(" | ") + " |\n\n"
         + "E2E answer paragraph.\n\n".repeat(20)
         + "## E2E reading position\n\n"
         + "E2E answer paragraph.\n\n".repeat(20),
@@ -95,12 +112,21 @@ try {
   ];
   Object.assign(richEntries.at(-1).message, { provider: "test", model: "E2E Model" });
   writeSession(RICH, richEntries);
-  // The default 50-entry page starts at compaction, with its user prompt outside it.
+  writeSession(CODE_BACKGROUND, [
+    message("user", null, "user", "E2E code background"),
+    message("answer", "user", "assistant", [{ type: "text", text:
+      "```js\nconst x = 1;\n```\n\n```mermaid\ngraph TD\n A --> B\n```",
+    }]),
+  ]);
+  // The default page is 50 *visible* messages (user / assistant / compaction).
+  // toolResults ride along free after #810, so 48 tool-call assistants + the
+  // final answer + the divider fill that window; the user prompt is the 51st
+  // visible entry and must stay outside the first page.
   const compactedEntries = [
     message("user", null, "user", "E2E prompt outside the compacted page"),
     { type: "compaction", id: "compact", parentId: "user", timestamp, summary: "E2E compaction anchor", firstKeptEntryId: "user", tokensBefore: 100 },
   ];
-  for (let i = 0; i < 24; i++) {
+  for (let i = 0; i < 48; i++) {
     compactedEntries.push(message(`call${i}`, compactedEntries.at(-1).id, "assistant", [
       { type: "toolCall", id: `t${i}`, name: "bash", arguments: { command: `echo step${i}` } },
     ]));
@@ -108,12 +134,16 @@ try {
     Object.assign(result.message, { toolCallId: `t${i}`, toolName: "bash", isError: false });
     compactedEntries.push(result);
   }
-  compactedEntries.push(message("answer", "result23", "assistant", [{ type: "text", text:
+  compactedEntries.push(message("answer", "result47", "assistant", [{ type: "text", text:
     "E2E compacted answer paragraph.\n\n".repeat(20)
     + "## E2E compacted heading\n\n"
     + "E2E compacted answer paragraph.\n\n".repeat(20),
   }]));
   writeSession(COMPACTED, compactedEntries);
+  writeSession(APPEND, [
+    message("root", null, "user", "E2E wrapper root"),
+    message("reply", "root", "assistant", "E2E wrapper reply"),
+  ]);
 
   const probe = createServer();
   probe.listen(0, "127.0.0.1");
@@ -137,6 +167,17 @@ try {
     return response.json();
   }
 
+  async function post(path, body) {
+    const response = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(60_000),
+    });
+    assert.ok(response.ok, `POST ${path} -> ${response.status}`);
+    return response.json();
+  }
+
   const deadline = Date.now() + 120_000;
   while (true) {
     if (serverError) throw serverError;
@@ -144,7 +185,7 @@ try {
     const response = await fetch(`${base}/api/sessions`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
     if (response?.ok) {
       const { sessions } = await response.json();
-      assert.deepEqual(sessions.map((session) => session.id).sort(), [LONG, BRANCH, RICH, COMPACTED].sort());
+      assert.deepEqual(sessions.map((session) => session.id).sort(), [LONG, BRANCH, RICH, COMPACTED, APPEND, CODE_BACKGROUND].sort());
       break;
     }
     assert.ok(Date.now() < deadline, "Server readiness timed out; see server.log");
@@ -174,6 +215,28 @@ try {
   assert.equal(compacted.context.messages.some((entry) => entry.role === "user"), false);
   console.log("PASS: bounded history, branch context, pagination root, and API errors");
 
+  // #632 regression: a live wrapper shadows the session file. Ordinary reads
+  // keep that snapshot (two processes writing one JSONL is unsupported). A
+  // mount/refresh GET (?force=1) must see the external append and stay stable.
+  {
+    const file = join(sessionDir, `2026-08-23T00-00-00-000Z_${APPEND}.jsonl`);
+    await post(`/api/agent/${APPEND}`, { type: "get_state" });
+    const beforeAppend = await api(`/api/sessions/${APPEND}`);
+    assert.deepEqual(beforeAppend.context.entryIds, ["root", "reply"], "the wrapper must serve its own snapshot first");
+    appendFileSync(file, `${JSON.stringify(message("external", "reply", "assistant", "E2E external append"))}\n`);
+    const ordinaryRead = await api(`/api/sessions/${APPEND}`);
+    assert.deepEqual(ordinaryRead.context.entryIds, ["root", "reply"], "post-turn reads must not probe disk");
+    assert.equal(ordinaryRead.wrapperRebuilt, undefined);
+    const afterForce = await api(`/api/sessions/${APPEND}?force=1`);
+    assert.deepEqual(afterForce.context.entryIds, ["root", "reply", "external"], "a mount/refresh read must see the external append");
+    assert.equal(afterForce.wrapperRebuilt, true);
+    const again = await api(`/api/sessions/${APPEND}`);
+    assert.deepEqual(again.context.entryIds, ["root", "reply", "external"], "repeated reads must stay stable");
+    const appended = await api(`/api/sessions/${APPEND}/context?tail=1`);
+    assert.deepEqual(appended.context.entryIds, ["external"], "the appended entry must be readable on its own");
+    console.log("PASS: external session-file appends are visible on force/mount reads");
+  }
+
   browser = await chromium.launch();
   for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
     context = await browser.newContext({ viewport, locale: "en-US" });
@@ -198,6 +261,28 @@ try {
     const sentinel = page.getByText("Scroll up to load earlier messages", { exact: true });
     await sentinel.waitFor({ state: "attached" });
     assert.equal(await page.getByText(text(4949), { exact: true }).count(), 0);
+    // The minimap numbers turns from the session's first, not the loaded page's (#791):
+    // e0..e4949 hold 2475 user messages, so the turn asking text(4998) is 2500.
+    const readMinimapTurn = async (screenshot) => {
+      const node = page.locator("[data-minimap-node-index='0']");
+      await node.waitFor();
+      const rect = await node.boundingBox();
+      assert.ok(rect);
+      await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      const preview = page.locator("[data-minimap-preview-box]");
+      const turn = preview.locator("[data-minimap-preview-index]").filter({ hasText: text(4998) });
+      const result = {
+        number: await turn.locator("span[aria-hidden='true']").first().textContent(),
+        earlier: await preview.locator("[data-minimap-preview-earlier]").textContent(),
+      };
+      await page.screenshot({ path: join(artifacts, screenshot) });
+      await page.mouse.move(0, 0);
+      await preview.waitFor({ state: "detached" });
+      return result;
+    };
+    if (viewport.width > 600) {
+      assert.deepEqual(await readMinimapTurn("minimap-turns-first-page.png"), { number: "2500", earlier: "Earlier turns not loaded: 2475. Click to load" });
+    }
 
     // Exercise the real IntersectionObserver and prepend path, twice.
     for (let turn = 0; turn < 2; turn++) {
@@ -233,6 +318,12 @@ try {
     // The sidebar also displays the first message as the session title.
     assert.deepEqual(rendered.filter((value) => value !== text(0)),
       Array.from({ length: 5000 - oldest }, (_, i) => text(oldest + i)), "Missing, reordered, or duplicate chat messages");
+    if (viewport.width > 600) {
+      assert.deepEqual(await readMinimapTurn("minimap-turns-paged.png"), {
+        number: "2500",
+        earlier: `Earlier turns not loaded: ${oldest / 2}. Click to load`,
+      }, "Loading older pages must not renumber minimap turns");
+    }
     await page.screenshot({ path: join(artifacts, `history-${viewport.width}.png`) });
 
     await page.goto(`${base}/?session=${BRANCH}`, { waitUntil: "domcontentloaded" });
@@ -251,6 +342,29 @@ try {
     assert.equal(await processDetails.count(), 1);
     assert.equal(await thinking.count(), 0, "All thinking stays inside process details");
     const finalMessage = page.locator("[data-entry-id='answer']");
+    const tables = finalMessage.last().locator(".markdown-table-wrap");
+    assert.equal(await tables.count(), 2);
+    await tables.first().scrollIntoViewIfNeeded();
+    await page.evaluate(() => document.fonts.ready);
+    const tableLayout = await tables.evaluateAll(([prose, wide]) => {
+      const wraps = (cell) => {
+        const range = document.createRange();
+        range.selectNodeContents(cell);
+        return range.getBoundingClientRect().height > parseFloat(getComputedStyle(cell).lineHeight);
+      };
+      return {
+        proseFits: prose.scrollWidth <= prose.clientWidth + 1,
+        longCellsWrap: [...prose.querySelectorAll("tr > :last-child")].every(wraps),
+        wideScrolls: wide.scrollWidth > wide.clientWidth + 1,
+        wideCellsStayOnOneLine: [...wide.querySelectorAll("tbody td")].every((cell) => !wraps(cell)),
+      };
+    });
+    assert.ok(tableLayout.proseFits, "Long table cells must not stretch a two-column table beyond the chat");
+    assert.ok(tableLayout.longCellsWrap, "Long headings, sentences, URLs, and inline code must wrap");
+    assert.ok(tableLayout.wideScrolls, "Wide tables must retain horizontal scrolling");
+    assert.ok(tableLayout.wideCellsStayOnOneLine, "Wide tables must not squeeze ordinary values into narrow columns");
+    await page.screenshot({ path: join(artifacts, `markdown-tables-${viewport.width}.png`) });
+    console.log(`PASS: ${viewport.width}px wrapping long table cells and scrolling wide tables`);
     assert.equal(await finalMessage.getByRole("button", { name: /^Thinking/ }).count(), 0);
     assert.equal(await finalMessage.getByText("test/E2E Model", { exact: true }).count(), 1);
     assert.equal(thinkingRequests.length, 0);
@@ -293,8 +407,17 @@ try {
       });
       await page.screenshot({ path: join(artifacts, "compaction-minimap.png") });
 
+      // A session row of the sidebar's sessions, found by its visible title
+      // (the row's tooltip adds message count and time, so no exact title match).
+      const sessionRow = (title) => page.locator("#session-sidebar-panel-sessions .session-tree-session").filter({
+        has: page.locator(".session-tree-title", { hasText: new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }),
+      });
+      const clickSessionRow = async (title) => {
+        await showSidebarSessions(page);
+        await sessionRow(title).locator(".session-tree-main").click();
+      };
       const selectSession = async (title, entryId) => {
-        await page.locator(`[title="${title}"]`).click();
+        await clickSessionRow(title);
         await page.locator(`[data-entry-id="${entryId}"]:not([data-message-role])`).waitFor({ state: "visible" });
       };
       const readingOffset = (target) => target.evaluate((element) => (
@@ -337,7 +460,7 @@ try {
       await page.route(agentRoute, (route) => route.fulfill({ json: {} }));
       try {
         const pendingHistory = page.waitForRequest((request) => request.url().includes(`/api/sessions/${LONG}/context?`) && new URL(request.url()).searchParams.has("before"));
-        await page.locator(`[title="${text(0)}"]`).click();
+        await clickSessionRow(text(0));
         await pendingHistory;
         await page.getByRole("button", { name: "Branches", exact: true }).click();
         await page.getByText("E2E alternate history branch", { exact: true }).click();
@@ -352,12 +475,31 @@ try {
       await page.goto(`${base}/?session=${COMPACTED}`, { waitUntil: "domcontentloaded" });
       await heading.waitFor({ state: "visible" });
     }
+    await page.goto(`${base}/?session=${RICH}`, { waitUntil: "domcontentloaded" });
+    await page.locator(".markdown-code-block pre").waitFor();
+    await checkFilePanel(page, previewFile);
     await checkExtensionDialogs(page, artifacts, viewport.width);
+    await checkExtensionDialogSizing(page, viewport.width);
     if (viewport.width > 600) {
       await page.goto(`${base}/?session=${RICH}`, { waitUntil: "domcontentloaded" });
       await page.locator(".markdown-code-block pre").waitFor();
       await checkChatAppearance(page);
+      await page.setViewportSize(viewport);
+      // Returning from the mobile breakpoint restores the desktop sidebar preference in an effect, so wait for the toggle to settle.
+      const hideSidebar = page.getByRole("button", { name: "Hide sidebar", exact: true });
+      const showSidebar = page.getByRole("button", { name: "Show sidebar", exact: true });
+      await hideSidebar.or(showSidebar).waitFor({ state: "visible" });
+      if (await showSidebar.isVisible()) await showSidebar.click();
+      await hideSidebar.waitFor({ state: "visible" });
+      // The files sit below the sessions on a desktop; Settings › General ›
+      // File browser brings the tabs back, and goes back.
+      await checkFilesPlacement(page);
+      console.log("PASS: files below the sessions by default, tabs from Settings and back");
+      await checkModelDiscovery(page);
     }
+    await page.goto(`${base}/?session=${CODE_BACKGROUND}`, { waitUntil: "domcontentloaded" });
+    await page.locator(".markdown-code-block pre").waitFor();
+    await checkCodeBackground(page);
     assert.deepEqual(errors, [], `Browser errors at width ${viewport.width}`);
     console.log(`PASS: ${viewport.width}px browser pagination, branch, markdown, code, tool call, and compaction navigation`);
     await context.tracing.stop();
@@ -365,6 +507,20 @@ try {
     context = undefined;
     page = undefined;
   }
+  // Last, in its own context and tabs, so the checks above run as before. It
+  // restores the sidebar state (pins, archive) and deletes the fork it makes.
+  await checkSessionNavigation({
+    browser,
+    base,
+    artifacts,
+    a: { id: BRANCH, entry: "new", text: "Active branch answer" },
+    b: { id: CODE_BACKGROUND, entry: "answer", text: "const x = 1;" },
+    api,
+    deleteSession: async (id) => {
+      const response = await fetch(`${base}/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE", signal: AbortSignal.timeout(30_000) });
+      assert.ok(response.ok, `DELETE session ${id} -> ${response.status}`);
+    },
+  });
 } catch (error) {
   console.error(error);
   process.exitCode = 1;

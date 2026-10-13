@@ -4,11 +4,15 @@ const STATIC_CACHE = `${CACHE_PREFIX}-static-${CACHE_VERSION}`;
 const OFFLINE_URL = "/offline.html";
 const PRECACHE_URLS = [
   OFFLINE_URL,
-  "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/apple-touch-icon.png",
 ];
+// A reachable port backed by a dead upstream accepts the connection and then
+// never answers: fetch() neither resolves nor rejects, so the navigation hangs
+// forever instead of falling back to offline.html. Bound every network wait.
+const NAVIGATION_TIMEOUT_MS = 8000;
+const ASSET_TIMEOUT_MS = 8000;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -44,9 +48,13 @@ self.addEventListener("fetch", (event) => {
   // Session data and live agent traffic must always come from the local server.
   if (url.pathname.startsWith("/api/") || url.pathname === "/sw.js") return;
 
+  // The manifest is runtime configuration. Bypass even entries left in an old
+  // cache, including requests with a query string or navigation mode.
+  if (url.pathname === "/manifest.webmanifest") return;
+
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request).catch(async () => {
+      fetchWithTimeout(request, NAVIGATION_TIMEOUT_MS).catch(async () => {
         const fallback = await caches.match(OFFLINE_URL);
         return fallback ?? Response.error();
       }),
@@ -59,7 +67,7 @@ self.addEventListener("fetch", (event) => {
     PRECACHE_URLS.includes(url.pathname);
 
   if (isStaticAsset) {
-    event.respondWith(cacheFirst(request));
+    event.respondWith(cacheFirst(request, event));
   }
 });
 
@@ -130,14 +138,46 @@ async function focusOrOpenWindow(targetUrl) {
   await self.clients.openWindow(targetUrl);
 }
 
-async function cacheFirst(request) {
+/**
+ * Fetch with a ceiling on the wait for the response headers (time to first
+ * byte). The timer is cleared as soon as they arrive, so a response that
+ * streams a long body — Next.js streams SSR output — is never cut off
+ * mid-stream.
+ */
+async function fetchWithTimeout(request, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(request, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function cacheFirst(request, event) {
   const cached = await caches.match(request);
   if (cached) return cached;
 
-  const response = await fetch(request);
+  const response = await fetchWithTimeout(request, ASSET_TIMEOUT_MS);
   if (response.ok && response.type === "basic") {
-    const cache = await caches.open(STATIC_CACHE);
-    await cache.put(request, response.clone());
+    // Deliberately NOT awaited before returning the response.
+    //
+    // The SW script URL is versioned (?v=<app version>), so every upgrade
+    // starts a fresh cache: the first load after an upgrade misses on every
+    // chunk and writes them all at once. Awaiting each write here held every
+    // response behind Cache Storage I/O, which stalled navigations past
+    // NAVIGATION_TIMEOUT_MS — the browser showed the offline page while the
+    // local server was perfectly healthy. waitUntil keeps this worker alive
+    // until the write finishes without blocking the response.
+    const copy = response.clone();
+    event.waitUntil(
+      caches
+        .open(STATIC_CACHE)
+        .then((cache) => cache.put(request, copy))
+        .catch(() => {
+          // A failed write only costs one network re-fetch next time.
+        }),
+    );
   }
   return response;
 }

@@ -1,5 +1,5 @@
 {
   "upstream_repository": "agegr/pi-web",
-  "upstream_tag": "v0.9.1",
-  "upstream_commit": "8366762fa4b4ef3327f1b19e8ff7bf891a14c06c"
+  "upstream_tag": "v0.12.1",
+  "upstream_commit": "f83b1a502f8e434555a7153fe08e1c135dd65ca9"
 }
